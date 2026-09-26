@@ -2,33 +2,29 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dark Island Raycasting</title>
+<title>Dark Island</title>
 
 <style>
-*{
+html,body{
     margin:0;
-    padding:0;
-    box-sizing:border-box;
-}
-
-body{
     overflow:hidden;
-    background:black;
+    background:#000;
 }
 
 canvas{
     display:block;
+    width:100vw;
+    height:100vh;
 }
 </style>
 </head>
 <body>
 
-<canvas id="game"></canvas>
+<canvas id="c"></canvas>
 
 <script>
 
-const canvas = document.getElementById("game");
+const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 
 function resize(){
@@ -38,17 +34,13 @@ function resize(){
 resize();
 addEventListener("resize",resize);
 
-const SIZE = 64;
+const SIZE = 256;
 
-const WATER = 0;
-const LAND = 1;
-const ROCK = 2;
-
-const map = [];
+const heightmap = [];
 
 for(let y=0;y<SIZE;y++){
 
-    map[y] = [];
+    heightmap[y] = [];
 
     for(let x=0;x<SIZE;x++){
 
@@ -57,260 +49,206 @@ for(let y=0;y<SIZE;y++){
 
         const dist = Math.sqrt(dx*dx + dy*dy);
 
-        let radius = 25 + Math.sin(x*0.4)*3 + Math.cos(y*0.3)*3;
+        let h =
+        70 -
+        dist +
+        Math.sin(x*0.12)*8 +
+        Math.cos(y*0.12)*8;
 
-        if(dist > radius){
-
-            map[y][x] = WATER;
-
-        }else{
-
-            if(Math.random() < 0.08)
-                map[y][x] = ROCK;
-            else
-                map[y][x] = LAND;
-        }
-
+        heightmap[y][x] = Math.max(0,h);
     }
 }
 
 const player = {
-    x:32,
-    y:32,
+    x:128,
+    y:128,
     angle:0,
-    speed:0.08
+    z:35
 };
 
 const keys = {};
 
-onkeydown = e => keys[e.key.toLowerCase()] = true;
-onkeyup   = e => keys[e.key.toLowerCase()] = false;
-
-function walkable(x,y){
-
-    const mx = Math.floor(x);
-    const my = Math.floor(y);
-
-    if(!map[my]) return false;
-
-    return map[my][mx] !== ROCK;
-}
+onkeydown=e=>keys[e.key.toLowerCase()]=1;
+onkeyup=e=>keys[e.key.toLowerCase()]=0;
 
 function update(){
 
-    if(keys["a"]) player.angle -= 0.04;
-    if(keys["d"]) player.angle += 0.04;
+    if(keys.a) player.angle-=0.03;
+    if(keys.d) player.angle+=0.03;
 
-    let dx = Math.cos(player.angle);
-    let dy = Math.sin(player.angle);
+    let speed=1.2;
 
-    if(keys["w"]){
-
-        let nx = player.x + dx * player.speed;
-        let ny = player.y + dy * player.speed;
-
-        if(walkable(nx,ny)){
-            player.x = nx;
-            player.y = ny;
-        }
+    if(keys.w){
+        player.x+=Math.cos(player.angle)*speed;
+        player.y+=Math.sin(player.angle)*speed;
     }
 
-    if(keys["s"]){
-
-        let nx = player.x - dx * player.speed;
-        let ny = player.y - dy * player.speed;
-
-        if(walkable(nx,ny)){
-            player.x = nx;
-            player.y = ny;
-        }
+    if(keys.s){
+        player.x-=Math.cos(player.angle)*speed;
+        player.y-=Math.sin(player.angle)*speed;
     }
+
 }
 
 function drawSky(){
 
     let g = ctx.createLinearGradient(
         0,0,
-        0,canvas.height/2
+        0,canvas.height
     );
 
-    g.addColorStop(0,"#02040a");
-    g.addColorStop(1,"#0b1524");
+    g.addColorStop(0,"#000000");
+    g.addColorStop(0.4,"#180000");
+    g.addColorStop(1,"#4b1200");
 
-    ctx.fillStyle = g;
+    ctx.fillStyle=g;
     ctx.fillRect(
         0,
         0,
         canvas.width,
-        canvas.height/2
+        canvas.height
     );
+}
 
-    ctx.fillStyle = "#f5f5dc";
+function drawLava(){
 
-    ctx.beginPath();
-    ctx.arc(
-        canvas.width*0.78,
-        canvas.height*0.18,
-        35,
+    ctx.fillStyle="#ffae42";
+
+    ctx.fillRect(
         0,
-        Math.PI*2
+        canvas.height*0.55,
+        canvas.width,
+        canvas.height
     );
-    ctx.fill();
+}
 
-    for(let i=0;i<120;i++){
+function renderTerrain(){
 
-        let x = (i*337)%canvas.width;
-        let y = (i*173)%250;
+    const horizon =
+    canvas.height*0.52;
 
-        ctx.fillStyle = "white";
-        ctx.fillRect(x,y,1,1);
+    for(let sx=0;sx<canvas.width;sx++){
+
+        let ray =
+        player.angle
+        -0.8
+        +(sx/canvas.width)*1.6;
+
+        let maxY =
+        canvas.height;
+
+        for(let d=2;d<200;d+=0.5){
+
+            let wx =
+            player.x +
+            Math.cos(ray)*d;
+
+            let wy =
+            player.y +
+            Math.sin(ray)*d;
+
+            let ix=wx|0;
+            let iy=wy|0;
+
+            if(
+                ix<0||
+                iy<0||
+                ix>=SIZE||
+                iy>=SIZE
+            )continue;
+
+            let h =
+            heightmap[iy][ix];
+
+            if(h<8)
+                continue;
+
+            let screenY =
+            horizon -
+            ((h-player.z)/d)*250;
+
+            if(screenY<maxY){
+
+                let fog =
+                1-d/200;
+
+                let r =
+                20*fog;
+
+                let g =
+                25*fog;
+
+                let b =
+                18*fog;
+
+                ctx.fillStyle=
+                `rgb(${r},${g},${b})`;
+
+                ctx.fillRect(
+                    sx,
+                    screenY,
+                    1,
+                    maxY-screenY
+                );
+
+                maxY=screenY;
+            }
+        }
     }
 }
 
-function drawGround(){
+function drawMoon(){
+
+    ctx.fillStyle="#ffd38a";
+
+    ctx.beginPath();
+    ctx.arc(
+        canvas.width*0.8,
+        canvas.height*0.22,
+        50,
+        0,
+        Math.PI*2
+    );
+
+    ctx.fill();
+}
+
+function drawFog(){
 
     let g = ctx.createLinearGradient(
         0,
-        canvas.height/2,
+        canvas.height*0.4,
         0,
         canvas.height
     );
 
-    g.addColorStop(0,"#233320");
-    g.addColorStop(1,"#161d15");
+    g.addColorStop(0,
+        "rgba(255,120,0,0)"
+    );
 
-    ctx.fillStyle = g;
+    g.addColorStop(1,
+        "rgba(255,120,0,0.18)"
+    );
+
+    ctx.fillStyle=g;
+
     ctx.fillRect(
         0,
-        canvas.height/2,
-        canvas.width,
-        canvas.height/2
-    );
-}
-
-function raycast(){
-
-    drawSky();
-    drawGround();
-
-    const FOV = Math.PI/3;
-    const MAX_DIST = 28;
-
-    for(let x=0;x<canvas.width;x++){
-
-        let angle =
-        player.angle -
-        FOV/2 +
-        (x/canvas.width)*FOV;
-
-        let dist = 0;
-        let hit = false;
-        let type = WATER;
-
-        while(!hit && dist < MAX_DIST){
-
-            dist += 0.04;
-
-            const rx =
-            player.x +
-            Math.cos(angle)*dist;
-
-            const ry =
-            player.y +
-            Math.sin(angle)*dist;
-
-            const mx = Math.floor(rx);
-            const my = Math.floor(ry);
-
-            if(!map[my]) break;
-
-            if(map[my][mx] === ROCK){
-
-                type = ROCK;
-                hit = true;
-            }
-        }
-
-        if(hit){
-
-            let corrected =
-            dist *
-            Math.cos(angle-player.angle);
-
-            let h =
-            canvas.height /
-            corrected;
-
-            let fog =
-            Math.max(
-                0,
-                1 - dist/MAX_DIST
-            );
-
-            let r = 90*fog;
-            let g = 95*fog;
-            let b = 100*fog;
-
-            ctx.fillStyle =
-            `rgb(${r},${g},${b})`;
-
-            ctx.fillRect(
-                x,
-                canvas.height/2 - h/2,
-                1,
-                h
-            );
-        }
-    }
-}
-
-function minimap(){
-
-    const s = 4;
-
-    for(let y=0;y<SIZE;y++){
-
-        for(let x=0;x<SIZE;x++){
-
-            let c = "#1f3f80";
-
-            if(map[y][x]===LAND)
-                c="#274a24";
-
-            if(map[y][x]===ROCK)
-                c="#666";
-
-            ctx.fillStyle=c;
-
-            ctx.fillRect(
-                x*s,
-                y*s,
-                s,
-                s
-            );
-        }
-    }
-
-    ctx.fillStyle="red";
-
-    ctx.beginPath();
-    ctx.arc(
-        player.x*s,
-        player.y*s,
-        3,
         0,
-        Math.PI*2
+        canvas.width,
+        canvas.height
     );
-    ctx.fill();
 }
 
 function loop(){
 
     update();
 
-    raycast();
-
-    minimap();
+    drawSky();
+    drawLava();
+    renderTerrain();
+    drawMoon();
+    drawFog();
 
     requestAnimationFrame(loop);
 }
