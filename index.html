@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raycasting Open World</title>
+
+<style>
+body{
+    margin:0;
+    overflow:hidden;
+    background:#000;
+}
+
+canvas{
+    display:block;
+}
+
+#info{
+    position:absolute;
+    top:10px;
+    left:10px;
+    color:white;
+    font-family:Arial;
+    background:rgba(0,0,0,.5);
+    padding:10px;
+}
+</style>
+</head>
+<body>
+
+<div id="info">
+WASD - Movimiento
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+}
+resize();
+addEventListener("resize",resize);
+
+const map = [
+[1,1,1,1,1,1,1,1,1,1,1,1],
+[1,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,1],
+[1,0,0,0,0,0,0,1,0,0,0,1],
+[1,0,0,0,0,0,0,1,0,0,0,1],
+[1,0,0,0,0,0,0,1,0,0,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,1],
+[1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+let player = {
+    x:2.5,
+    y:2.5,
+    angle:0,
+    speed:0.06
+};
+
+const keys = {};
+
+onkeydown = e => keys[e.key.toLowerCase()] = true;
+onkeyup = e => keys[e.key.toLowerCase()] = false;
+
+function canMove(x,y){
+
+    let mx = Math.floor(x);
+    let my = Math.floor(y);
+
+    return map[my] && map[my][mx] === 0;
+}
+
+function update(){
+
+    if(keys["a"])
+        player.angle -= 0.04;
+
+    if(keys["d"])
+        player.angle += 0.04;
+
+    let dx = Math.cos(player.angle);
+    let dy = Math.sin(player.angle);
+
+    if(keys["w"]){
+
+        let nx = player.x + dx * player.speed;
+        let ny = player.y + dy * player.speed;
+
+        if(canMove(nx,ny)){
+            player.x = nx;
+            player.y = ny;
+        }
+    }
+
+    if(keys["s"]){
+
+        let nx = player.x - dx * player.speed;
+        let ny = player.y - dy * player.speed;
+
+        if(canMove(nx,ny)){
+            player.x = nx;
+            player.y = ny;
+        }
+    }
+}
+
+function raycast(){
+
+    const fov = Math.PI/3;
+    const rays = canvas.width;
+
+    ctx.fillStyle="#333";
+    ctx.fillRect(0,0,canvas.width,canvas.height/2);
+
+    ctx.fillStyle="#222";
+    ctx.fillRect(
+        0,
+        canvas.height/2,
+        canvas.width,
+        canvas.height/2
+    );
+
+    for(let i=0;i<rays;i++){
+
+        let rayAngle =
+            player.angle -
+            fov/2 +
+            (i/rays)*fov;
+
+        let distance = 0;
+        let hit = false;
+
+        while(!hit && distance < 20){
+
+            distance += 0.02;
+
+            let rx =
+                player.x +
+                Math.cos(rayAngle)*distance;
+
+            let ry =
+                player.y +
+                Math.sin(rayAngle)*distance;
+
+            let mx = Math.floor(rx);
+            let my = Math.floor(ry);
+
+            if(map[my] && map[my][mx] === 1){
+                hit = true;
+            }
+        }
+
+        let corrected =
+            distance *
+            Math.cos(rayAngle-player.angle);
+
+        let wallHeight =
+            canvas.height /
+            corrected;
+
+        let shade =
+            Math.max(30,255-distance*15);
+
+        ctx.fillStyle =
+            `rgb(${shade},${shade},${shade})`;
+
+        ctx.fillRect(
+            i,
+            canvas.height/2-wallHeight/2,
+            1,
+            wallHeight
+        );
+    }
+}
+
+function drawMinimap(){
+
+    let scale = 15;
+
+    for(let y=0;y<map.length;y++){
+        for(let x=0;x<map[y].length;x++){
+
+            ctx.fillStyle =
+                map[y][x]
+                ? "#fff"
+                : "#222";
+
+            ctx.fillRect(
+                x*scale,
+                y*scale,
+                scale,
+                scale
+            );
+        }
+    }
+
+    ctx.fillStyle="red";
+
+    ctx.beginPath();
+    ctx.arc(
+        player.x*scale,
+        player.y*scale,
+        4,
+        0,
+        Math.PI*2
+    );
+    ctx.fill();
+
+    ctx.strokeStyle="red";
+
+    ctx.beginPath();
+    ctx.moveTo(
+        player.x*scale,
+        player.y*scale
+    );
+
+    ctx.lineTo(
+        player.x*scale +
+        Math.cos(player.angle)*20,
+        player.y*scale +
+        Math.sin(player.angle)*20
+    );
+
+    ctx.stroke();
+}
+
+function loop(){
+
+    update();
+
+    raycast();
+
+    drawMinimap();
+
+    requestAnimationFrame(loop);
+}
+
+loop();
+
+</script>
+
+</body>
+</html>
