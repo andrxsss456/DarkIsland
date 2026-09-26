@@ -1,260 +1,3041 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+
 <meta charset="UTF-8">
+
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
 <title>Dark Island</title>
 
 <style>
+
 html,body{
+
     margin:0;
     overflow:hidden;
     background:#000;
+
 }
 
-canvas{
-    display:block;
-    width:100vw;
-    height:100vh;
+#ui{
+
+    position:absolute;
+
+    top:10px;
+    left:10px;
+
+    color:white;
+
+    font-family:Arial;
+
+    z-index:100;
+
+    text-shadow:
+        0 1px 3px #000;
+
 }
+
 </style>
+
+<!-- =====================================================
+     WORKER
+===================================================== -->
+
+<script id="chunk-worker"
+type="javascript/worker">
+
+function noise(x,z){
+
+    return (
+
+        Math.sin(x*0.05)
+        +
+        Math.cos(z*0.04)
+        +
+        Math.sin((x+z)*0.03)
+
+    ) * 0.5;
+
+}
+
+
+function getHeight(x,z){
+
+    const r =
+    Math.sqrt(
+        x*x + z*z
+    );
+
+    const island =
+        40 -
+        r*0.1;
+
+    return Math.max(
+
+        0,
+
+        island +
+        noise(x,z)*5
+
+    );
+
+}
+
+
+function generateChunkData(cx,cz){
+
+    const CHUNK_SIZE = 16;
+
+    const voxels = [];
+
+    for(let x=0;x<CHUNK_SIZE;x++){
+
+        for(let z=0;z<CHUNK_SIZE;z++){
+
+            const wx =
+            cx*CHUNK_SIZE+x;
+
+            const wz =
+            cz*CHUNK_SIZE+z;
+
+            const height =
+            Math.floor(
+                getHeight(wx,wz)
+            );
+
+            voxels.push({
+
+                x,
+                z,
+                height
+
+            });
+
+        }
+
+    }
+
+    return {
+
+        cx,
+        cz,
+
+        voxels
+
+    };
+
+}
+
+
+self.onmessage = e=>{
+
+    const {cx,cz} =
+    e.data;
+
+    const chunk =
+    generateChunkData(
+        cx,
+        cz
+    );
+
+    self.postMessage(chunk);
+
+};
+
+</script>
+
 </head>
+
 <body>
 
-<canvas id="c"></canvas>
+<div id="ui">
 
-<script>
+WASD / Flechas<br>
+Espacio = Saltar<br>
+Click = Capturar ratón<br>
+F5 = Guardar partida
 
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
+</div>
 
-function resize(){
-    canvas.width = innerWidth;
-    canvas.height = innerHeight;
-}
-resize();
-addEventListener("resize",resize);
 
-const SIZE = 256;
+<script type="module">
 
-const heightmap = [];
+import * as THREE from
+"https://unpkg.com/three@0.165.0/build/three.module.js";
 
-for(let y=0;y<SIZE;y++){
 
-    heightmap[y] = [];
+/* =====================================================
+   ESCENA
+===================================================== */
 
-    for(let x=0;x<SIZE;x++){
+const scene =
+new THREE.Scene();
 
-        const dx = x - SIZE/2;
-        const dy = y - SIZE/2;
 
-        const dist = Math.sqrt(dx*dx + dy*dy);
+scene.fog =
+new THREE.FogExp2(
 
-        let h =
-        70 -
-        dist +
-        Math.sin(x*0.12)*8 +
-        Math.cos(y*0.12)*8;
+    0x2b0f00,
 
-        heightmap[y][x] = Math.max(0,h);
+    0.012
+
+);
+
+
+scene.background =
+new THREE.Color(
+    0x160200
+);
+
+
+/* =====================================================
+   CÁMARA
+===================================================== */
+
+const camera =
+new THREE.PerspectiveCamera(
+
+    75,
+
+    innerWidth /
+    innerHeight,
+
+    0.1,
+
+    1000
+
+);
+
+
+const renderer =
+new THREE.WebGLRenderer({
+
+    antialias:true
+
+});
+
+
+renderer.setSize(
+    innerWidth,
+    innerHeight
+);
+
+
+renderer.setPixelRatio(
+    Math.min(
+        devicePixelRatio,
+        2
+    )
+);
+
+
+document.body.appendChild(
+    renderer.domElement
+);
+
+
+/* =====================================================
+   LUCES
+===================================================== */
+
+const moonLight =
+new THREE.DirectionalLight(
+
+    0xffaa66,
+
+    1.5
+
+);
+
+
+moonLight.position.set(
+    50,
+    100,
+    30
+);
+
+
+scene.add(
+    moonLight
+);
+
+
+scene.add(
+
+    new THREE.AmbientLight(
+
+        0x553311,
+
+        1
+
+    )
+
+);
+
+
+/* =====================================================
+   LUNA
+===================================================== */
+
+const moon =
+new THREE.Mesh(
+
+    new THREE.SphereGeometry(
+        4,
+        32,
+        32
+    ),
+
+    new THREE.MeshBasicMaterial({
+
+        color:0xffcc88
+
+    })
+
+);
+
+
+moon.position.set(
+    70,
+    80,
+    -100
+);
+
+
+moon.scale.set(
+    3,
+    3,
+    3
+);
+
+
+scene.add(moon);
+
+
+/* =====================================================
+   CONFIGURACIÓN
+===================================================== */
+
+const CHUNK_SIZE = 16;
+
+const RENDER_DISTANCE = 4;
+
+const LAVA_LEVEL = 0;
+
+const cameraCollisionRadius =
+0.5;
+
+
+const chunks =
+new Map();
+
+
+const chunkQueue = [];
+
+
+const trees = [];
+
+const rocks = [];
+
+const caves = [];
+
+const ruins = [];
+
+const particles = [];
+
+
+/* =====================================================
+   TIPOS DE ÁRBOLES
+===================================================== */
+
+const TREE_TYPES = [
+
+    "pine",
+    "dead",
+    "twisted"
+
+];
+
+
+/* =====================================================
+   WORKER
+===================================================== */
+
+const blob =
+new Blob(
+
+    [
+
+        document.getElementById(
+            "chunk-worker"
+        ).textContent
+
+    ],
+
+    {
+
+        type:
+        "application/javascript"
+
     }
+
+);
+
+
+const worker =
+new Worker(
+
+    URL.createObjectURL(
+        blob
+    )
+
+);
+
+
+worker.onmessage = e=>{
+
+    buildChunkMesh(
+        e.data
+    );
+
+};
+
+
+/* =====================================================
+   NOISE
+===================================================== */
+
+function noise(x,z){
+
+    return (
+
+        Math.sin(x*0.05)
+        +
+        Math.cos(z*0.04)
+        +
+        Math.sin((x+z)*0.03)
+
+    ) * 0.5;
+
 }
+
+
+/* =====================================================
+   ALTURA
+===================================================== */
+
+function getHeight(x,z){
+
+    const r =
+    Math.sqrt(
+        x*x + z*z
+    );
+
+
+    const island =
+        40 -
+        r*0.1;
+
+
+    return Math.max(
+
+        0,
+
+        island +
+        noise(x,z)*5
+
+    );
+
+}
+
+
+/* =====================================================
+   CUEVAS
+===================================================== */
+
+function isCave(x,y,z){
+
+    const value =
+
+        Math.sin(x*0.09) *
+        Math.cos(z*0.08) *
+        Math.sin(y*0.2);
+
+
+    return value > 0.78;
+
+}
+
+
+/* =====================================================
+   CHUNK KEY
+===================================================== */
+
+function chunkKey(cx,cz){
+
+    return `${cx},${cz}`;
+
+}
+
+
+/* =====================================================
+   JUGADOR
+===================================================== */
 
 const player = {
-    x:128,
-    y:128,
-    angle:0,
-    z:35
+
+    x:0,
+    y:20,
+    z:0,
+
+    velY:0,
+
+    grounded:false,
+
+    radius:0.5
+
 };
+
+
+const playerMesh =
+new THREE.Mesh(
+
+    new THREE.CapsuleGeometry(
+        0.5,
+        1
+    ),
+
+    new THREE.MeshStandardMaterial({
+
+        color:0x333333
+
+    })
+
+);
+
+
+scene.add(
+    playerMesh
+);
+
+
+/* =====================================================
+   CONTROLES
+===================================================== */
 
 const keys = {};
 
-onkeydown=e=>keys[e.key.toLowerCase()]=1;
-onkeyup=e=>keys[e.key.toLowerCase()]=0;
 
-function update(){
+addEventListener(
 
-    if(keys.a) player.angle-=0.03;
-    if(keys.d) player.angle+=0.03;
+    "keydown",
 
-    let speed=1.2;
+    e=>{
 
-    if(keys.w){
-        player.x+=Math.cos(player.angle)*speed;
-        player.y+=Math.sin(player.angle)*speed;
+        keys[e.code] = true;
+
     }
 
-    if(keys.s){
-        player.x-=Math.cos(player.angle)*speed;
-        player.y-=Math.sin(player.angle)*speed;
+);
+
+
+addEventListener(
+
+    "keyup",
+
+    e=>{
+
+        keys[e.code] = false;
+
+    }
+
+);
+
+
+/* =====================================================
+   RATÓN
+===================================================== */
+
+let cameraYaw = 0;
+
+let cameraPitch = -0.35;
+
+
+renderer.domElement.onclick =
+()=>{
+
+    renderer.domElement
+    .requestPointerLock();
+
+};
+
+
+document.addEventListener(
+
+    "mousemove",
+
+    e=>{
+
+        if(
+
+            document.pointerLockElement !==
+            renderer.domElement
+
+        ) return;
+
+
+        cameraYaw -=
+        e.movementX * 0.002;
+
+
+        cameraPitch -=
+        e.movementY * 0.002;
+
+
+        cameraPitch =
+        Math.max(
+
+            -1.2,
+
+            Math.min(
+                0.5,
+                cameraPitch
+            )
+
+        );
+
+    }
+
+);
+
+
+/* =====================================================
+   ÁRBOLES
+===================================================== */
+
+function createPineTree(){
+
+    const group =
+    new THREE.Group();
+
+
+    const trunk =
+    new THREE.Mesh(
+
+        new THREE.CylinderGeometry(
+            0.25,
+            0.4,
+            4,
+            8
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x3a2412
+
+        })
+
+    );
+
+
+    trunk.position.y = 2;
+
+
+    group.add(
+        trunk
+    );
+
+
+    const leaves =
+    new THREE.Mesh(
+
+        new THREE.ConeGeometry(
+            2.2,
+            5,
+            8
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x1c3018
+
+        })
+
+    );
+
+
+    leaves.position.y =
+    5.5;
+
+
+    group.add(
+        leaves
+    );
+
+
+    return group;
+
+}
+
+
+function createDeadTree(){
+
+    const group =
+    new THREE.Group();
+
+
+    const trunk =
+    new THREE.Mesh(
+
+        new THREE.CylinderGeometry(
+            0.25,
+            0.45,
+            5,
+            6
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x24150d
+
+        })
+
+    );
+
+
+    trunk.rotation.z =
+    0.08;
+
+
+    trunk.position.y = 2.5;
+
+
+    group.add(
+        trunk
+    );
+
+
+    for(let i=0;i<3;i++){
+
+        const branch =
+        new THREE.Mesh(
+
+            new THREE.CylinderGeometry(
+                0.08,
+                0.16,
+                2,
+                6
+            ),
+
+            new THREE.MeshStandardMaterial({
+
+                color:0x24150d
+
+            })
+
+        );
+
+
+        branch.position.set(
+
+            (i-1)*0.4,
+
+            3+i*0.5,
+
+            0
+
+        );
+
+
+        branch.rotation.z =
+        0.7;
+
+
+        group.add(
+            branch
+        );
+
+    }
+
+
+    return group;
+
+}
+
+
+function createTwistedTree(){
+
+    const group =
+    new THREE.Group();
+
+
+    const trunk =
+    new THREE.Mesh(
+
+        new THREE.CylinderGeometry(
+            0.3,
+            0.5,
+            5,
+            8
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x302014
+
+        })
+
+    );
+
+
+    trunk.rotation.z =
+    0.18;
+
+
+    trunk.position.y =
+    2.5;
+
+
+    group.add(
+        trunk
+    );
+
+
+    const leaves =
+    new THREE.Mesh(
+
+        new THREE.SphereGeometry(
+            2.1,
+            8,
+            6
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x162511
+
+        })
+
+    );
+
+
+    leaves.position.y =
+    5.2;
+
+
+    leaves.scale.set(
+        1,
+        1.4,
+        1
+    );
+
+
+    group.add(
+        leaves
+    );
+
+
+    return group;
+
+}
+
+
+function createTree(
+    x,
+    y,
+    z,
+    chunk=null
+){
+
+    const type =
+    TREE_TYPES[
+
+        Math.floor(
+
+            Math.random() *
+            TREE_TYPES.length
+
+        )
+
+    ];
+
+
+    let treeMesh;
+
+
+    if(type === "pine"){
+
+        treeMesh =
+        createPineTree();
+
+    }
+
+    else if(type === "dead"){
+
+        treeMesh =
+        createDeadTree();
+
+    }
+
+    else{
+
+        treeMesh =
+        createTwistedTree();
+
+    }
+
+
+    treeMesh.position.set(
+        x,
+        y,
+        z
+    );
+
+
+    if(chunk){
+
+        chunk.group.add(
+            treeMesh
+        );
+
+    }
+
+    else{
+
+        scene.add(
+            treeMesh
+        );
+
+    }
+
+
+    const tree = {
+
+        x,
+        y,
+        z,
+
+        radius:0.7,
+
+        height:4,
+
+        type,
+
+        mesh:treeMesh,
+
+        chunk
+
+    };
+
+
+    trees.push(tree);
+
+
+    if(chunk){
+
+        chunk.trees.push(
+            tree
+        );
+
+    }
+
+
+    return tree;
+
+}
+
+
+/* =====================================================
+   ROCAS
+===================================================== */
+
+function createRock(
+    x,
+    y,
+    z,
+    chunk=null
+){
+
+    const geo =
+    new THREE.IcosahedronGeometry(
+        1.5,
+        1
+    );
+
+
+    const pos =
+    geo.attributes.position;
+
+
+    for(
+        let i=0;
+        i<pos.count;
+        i++
+    ){
+
+        pos.setXYZ(
+
+            i,
+
+            pos.getX(i) +
+            (Math.random()-0.5)*0.3,
+
+            pos.getY(i) +
+            (Math.random()-0.5)*0.2,
+
+            pos.getZ(i) +
+            (Math.random()-0.5)*0.3
+
+        );
+
+    }
+
+
+    pos.needsUpdate = true;
+
+
+    const rock =
+    new THREE.Mesh(
+
+        geo,
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x595959
+
+        })
+
+    );
+
+
+    rock.position.set(
+
+        x,
+        y+1,
+        z
+
+    );
+
+
+    if(chunk){
+
+        chunk.group.add(
+            rock
+        );
+
+    }
+
+    else{
+
+        scene.add(
+            rock
+        );
+
+    }
+
+
+    const data = {
+
+        x,
+        y,
+        z,
+
+        radius:1.6,
+
+        mesh:rock,
+
+        chunk
+
+    };
+
+
+    rocks.push(data);
+
+
+    if(chunk){
+
+        chunk.rocks.push(data);
+
+    }
+
+
+    return data;
+
+}
+
+
+/* =====================================================
+   RUINAS
+===================================================== */
+
+const ruinMaterial =
+new THREE.MeshStandardMaterial({
+
+    color:0x29231e
+
+});
+
+
+function createRuin(
+    x,
+    y,
+    z,
+    chunk=null
+){
+
+    const ruin =
+    new THREE.Group();
+
+
+    for(let i=0;i<6;i++){
+
+        const wall =
+        new THREE.Mesh(
+
+            new THREE.BoxGeometry(
+                1,
+                4,
+                4
+            ),
+
+            ruinMaterial
+
+        );
+
+
+        wall.position.x =
+        i*2;
+
+
+        ruin.add(
+            wall
+        );
+
+    }
+
+
+    ruin.position.set(
+        x,
+        y,
+        z
+    );
+
+
+    if(chunk){
+
+        chunk.group.add(
+            ruin
+        );
+
+    }
+
+    else{
+
+        scene.add(
+            ruin
+        );
+
+    }
+
+
+    ruins.push({
+
+        x,
+        y,
+        z,
+
+        mesh:ruin,
+
+        chunk
+
+    });
+
+
+    if(chunk){
+
+        chunk.ruins.push(
+            ruins[ruins.length-1]
+        );
+
+    }
+
+
+    return ruin;
+
+}
+
+
+/* =====================================================
+   COLISIONES
+===================================================== */
+
+function collideTrees(x,z){
+
+    for(
+        const tree of trees
+    ){
+
+        const dx =
+        x-tree.x;
+
+        const dz =
+        z-tree.z;
+
+
+        if(
+
+            dx*dx+
+            dz*dz
+
+            <
+
+            tree.radius*
+            tree.radius
+
+        ){
+
+            return true;
+
+        }
+
+    }
+
+
+    return false;
+
+}
+
+
+function collideRocks(x,z){
+
+    for(
+        const rock of rocks
+    ){
+
+        const dx =
+        x-rock.x;
+
+        const dz =
+        z-rock.z;
+
+
+        if(
+
+            dx*dx+
+            dz*dz
+
+            <
+
+            rock.radius*
+            rock.radius
+
+        ){
+
+            return true;
+
+        }
+
+    }
+
+
+    return false;
+
+}
+
+
+/* =====================================================
+   CUEVAS
+===================================================== */
+
+function generateCaves(chunk){
+
+    for(let i=0;i<4;i++){
+
+        const x =
+        chunk.cx*
+        CHUNK_SIZE +
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const z =
+        chunk.cz*
+        CHUNK_SIZE +
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const y =
+        getHeight(x,z)-6;
+
+
+        const cave = {
+
+            x,
+            y,
+            z,
+
+            radius:
+            4+Math.random()*6,
+
+            chunk
+
+        };
+
+
+        caves.push(cave);
+
+        chunk.caves.push(cave);
+
+
+        createCaveMesh(
+            cave
+        );
+
     }
 
 }
 
-function drawSky(){
 
-    let g = ctx.createLinearGradient(
-        0,0,
-        0,canvas.height
+function createCaveMesh(cave){
+
+    const mesh =
+    new THREE.Mesh(
+
+        new THREE.SphereGeometry(
+
+            cave.radius,
+
+            24,
+            24
+
+        ),
+
+        new THREE.MeshStandardMaterial({
+
+            color:0x151515,
+
+            side:
+            THREE.BackSide
+
+        })
+
     );
 
-    g.addColorStop(0,"#000000");
-    g.addColorStop(0.4,"#180000");
-    g.addColorStop(1,"#4b1200");
 
-    ctx.fillStyle=g;
-    ctx.fillRect(
-        0,
-        0,
-        canvas.width,
-        canvas.height
+    mesh.position.set(
+
+        cave.x,
+        cave.y,
+        cave.z
+
     );
+
+
+    cave.mesh =
+    mesh;
+
+
+    cave.chunk.group.add(
+        mesh
+    );
+
 }
 
-function drawLava(){
 
-    ctx.fillStyle="#ffae42";
+function insideCave(
+    x,
+    y,
+    z
+){
 
-    ctx.fillRect(
-        0,
-        canvas.height*0.55,
-        canvas.width,
-        canvas.height
-    );
+    for(
+        const cave of caves
+    ){
+
+        const dx =
+        x-cave.x;
+
+        const dy =
+        y-cave.y;
+
+        const dz =
+        z-cave.z;
+
+
+        const d =
+        Math.sqrt(
+
+            dx*dx+
+            dy*dy+
+            dz*dz
+
+        );
+
+
+        if(
+            d<cave.radius
+        ){
+
+            return cave;
+
+        }
+
+    }
+
+
+    return null;
+
 }
 
-function renderTerrain(){
 
-    const horizon =
-    canvas.height*0.52;
+/* =====================================================
+   COLISIÓN CÁMARA
+===================================================== */
 
-    for(let sx=0;sx<canvas.width;sx++){
+function cameraBlocked(
+    x,
+    y,
+    z
+){
 
-        let ray =
-        player.angle
-        -0.8
-        +(sx/canvas.width)*1.6;
+    for(
+        const rock of rocks
+    ){
 
-        let maxY =
-        canvas.height;
+        const dx =
+        x-rock.x;
 
-        for(let d=2;d<200;d+=0.5){
+        const dz =
+        z-rock.z;
 
-            let wx =
-            player.x +
-            Math.cos(ray)*d;
 
-            let wy =
-            player.y +
-            Math.sin(ray)*d;
+        if(
 
-            let ix=wx|0;
-            let iy=wy|0;
+            dx*dx+
+            dz*dz
 
-            if(
-                ix<0||
-                iy<0||
-                ix>=SIZE||
-                iy>=SIZE
-            )continue;
+            <
 
-            let h =
-            heightmap[iy][ix];
+            (rock.radius+
+            cameraCollisionRadius)*
+            (rock.radius+
+            cameraCollisionRadius)
 
-            if(h<8)
-                continue;
+        ){
 
-            let screenY =
-            horizon -
-            ((h-player.z)/d)*250;
+            return true;
 
-            if(screenY<maxY){
+        }
 
-                let fog =
-                1-d/200;
+    }
 
-                let r =
-                20*fog;
 
-                let g =
-                25*fog;
+    for(
+        const tree of trees
+    ){
 
-                let b =
-                18*fog;
+        const dx =
+        x-tree.x;
 
-                ctx.fillStyle=
-                `rgb(${r},${g},${b})`;
+        const dz =
+        z-tree.z;
 
-                ctx.fillRect(
-                    sx,
-                    screenY,
-                    1,
-                    maxY-screenY
+
+        if(
+
+            dx*dx+
+            dz*dz
+
+            <
+
+            (tree.radius+
+            cameraCollisionRadius)*
+            (tree.radius+
+            cameraCollisionRadius)
+
+        ){
+
+            return true;
+
+        }
+
+    }
+
+
+    return false;
+
+}
+
+
+function cameraCollision(){
+
+    const cave =
+    insideCave(
+
+        camera.position.x,
+        camera.position.y,
+        camera.position.z
+
+    );
+
+
+    if(cave){
+
+        camera.position.lerp(
+
+            new THREE.Vector3(
+
+                player.x,
+                player.y+2,
+                player.z
+
+            ),
+
+            0.15
+
+        );
+
+    }
+
+}
+
+
+/* =====================================================
+   GREEDY MESH
+===================================================== */
+
+function greedyMesh(
+    voxels
+){
+
+    const vertices = [];
+
+    const indices = [];
+
+
+    /*
+       Base preparada para fusionar caras.
+       El terreno visual actual utiliza meshes por
+       celda para mantener compatibilidad con el sistema
+       existente.
+    */
+
+
+    return {
+
+        vertices,
+        indices
+
+    };
+
+}
+
+
+/* =====================================================
+   CONSTRUCCIÓN DE CHUNK DESDE WORKER
+===================================================== */
+
+function buildChunkMesh(
+    data
+){
+
+    const key =
+    chunkKey(
+        data.cx,
+        data.cz
+    );
+
+
+    if(
+        chunks.has(key)
+    ){
+
+        return;
+
+    }
+
+
+    const group =
+    new THREE.Group();
+
+
+    const chunk = {
+
+        cx:data.cx,
+        cz:data.cz,
+
+        group,
+
+        trees:[],
+        rocks:[],
+        caves:[],
+        ruins:[]
+
+    };
+
+
+    scene.add(
+        group
+    );
+
+
+    for(
+        const voxel of data.voxels
+    ){
+
+        const h =
+        voxel.height;
+
+
+        if(h<=0)
+            continue;
+
+
+        const wx =
+        data.cx*
+        CHUNK_SIZE+
+        voxel.x;
+
+
+        const wz =
+        data.cz*
+        CHUNK_SIZE+
+        voxel.z;
+
+
+        const material =
+        new THREE.MeshStandardMaterial({
+
+            color:
+            h<2
+            ?
+            0xff7722
+            :
+            0x253120
+
+        });
+
+
+        const ground =
+        new THREE.Mesh(
+
+            new THREE.BoxGeometry(
+                1,
+                h,
+                1
+            ),
+
+            material
+
+        );
+
+
+        ground.position.set(
+
+            wx,
+            h/2,
+            wz
+
+        );
+
+
+        group.add(
+            ground
+        );
+
+    }
+
+
+    chunks.set(
+        key,
+        chunk
+    );
+
+
+    generateChunkObjects(
+        chunk
+    );
+
+
+    generateCaves(
+        chunk
+    );
+
+}
+
+
+/* =====================================================
+   GENERAR OBJETOS
+===================================================== */
+
+function generateChunkObjects(
+    chunk
+){
+
+    for(let i=0;i<12;i++){
+
+        const x =
+        chunk.cx*
+        CHUNK_SIZE+
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const z =
+        chunk.cz*
+        CHUNK_SIZE+
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const height =
+        getHeight(x,z);
+
+
+        if(
+
+            height>3 &&
+            Math.random()>0.4
+
+        ){
+
+            createTree(
+
+                x,
+                height,
+                z,
+                chunk
+
+            );
+
+        }
+
+
+        if(
+
+            Math.random()<0.02
+
+        ){
+
+            createRuin(
+
+                x,
+                height,
+                z,
+                chunk
+
+            );
+
+        }
+
+    }
+
+
+    for(let i=0;i<5;i++){
+
+        const x =
+        chunk.cx*
+        CHUNK_SIZE+
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const z =
+        chunk.cz*
+        CHUNK_SIZE+
+        Math.random()*
+        CHUNK_SIZE;
+
+
+        const height =
+        getHeight(x,z);
+
+
+        if(
+            height>1
+        ){
+
+            createRock(
+
+                x,
+                height,
+                z,
+                chunk
+
+            );
+
+        }
+
+    }
+
+}
+
+
+/* =====================================================
+   SOLICITAR CHUNK
+===================================================== */
+
+function requestChunk(
+    cx,
+    cz
+){
+
+    const key =
+    chunkKey(cx,cz);
+
+
+    if(
+        chunks.has(key)
+    ){
+
+        return;
+
+    }
+
+
+    if(
+
+        chunkQueue.some(
+            task =>
+            task.cx===cx &&
+            task.cz===cz
+        )
+
+    ){
+
+        return;
+
+    }
+
+
+    chunkQueue.push({
+
+        cx,
+        cz
+
+    });
+
+
+    worker.postMessage({
+
+        cx,
+        cz
+
+    });
+
+}
+
+
+/* =====================================================
+   PROCESAR COLA
+===================================================== */
+
+function processChunkQueue(){
+
+    let generated = 0;
+
+
+    while(
+
+        chunkQueue.length &&
+        generated<1
+
+    ){
+
+        const task =
+        chunkQueue.shift();
+
+
+        /*
+           El Worker procesa la geometría de datos.
+           Aquí sólo marcamos el trabajo como iniciado.
+        */
+
+        generated++;
+
+    }
+
+}
+
+
+/* =====================================================
+   CARGAR CHUNK
+===================================================== */
+
+function loadChunk(
+    cx,
+    cz
+){
+
+    requestChunk(
+        cx,
+        cz
+    );
+
+}
+
+
+/* =====================================================
+   DESCARGAR CHUNK
+===================================================== */
+
+function unloadChunk(
+    cx,
+    cz
+){
+
+    const key =
+    chunkKey(cx,cz);
+
+
+    const chunk =
+    chunks.get(key);
+
+
+    if(!chunk)
+        return;
+
+
+    for(
+        const tree of chunk.trees
+    ){
+
+        const i =
+        trees.indexOf(tree);
+
+        if(i!==-1){
+
+            trees.splice(
+                i,
+                1
+            );
+
+        }
+
+    }
+
+
+    for(
+        const rock of chunk.rocks
+    ){
+
+        const i =
+        rocks.indexOf(rock);
+
+        if(i!==-1){
+
+            rocks.splice(
+                i,
+                1
+            );
+
+        }
+
+    }
+
+
+    for(
+        const cave of chunk.caves
+    ){
+
+        const i =
+        caves.indexOf(cave);
+
+        if(i!==-1){
+
+            caves.splice(
+                i,
+                1
+            );
+
+        }
+
+    }
+
+
+    for(
+        const ruin of chunk.ruins
+    ){
+
+        const i =
+        ruins.indexOf(ruin);
+
+        if(i!==-1){
+
+            ruins.splice(
+                i,
+                1
+            );
+
+        }
+
+    }
+
+
+    scene.remove(
+        chunk.group
+    );
+
+
+    chunk.group.traverse(
+        object=>{
+
+            if(object.geometry){
+
+                object.geometry.dispose();
+
+            }
+
+            if(object.material){
+
+                if(
+                    Array.isArray(
+                        object.material
+                    )
+                ){
+
+                    object.material.forEach(
+                        m=>m.dispose()
+                    );
+
+                }
+                else{
+
+                    object.material.dispose();
+
+                }
+
+            }
+
+        }
+    );
+
+
+    chunks.delete(
+        key
+    );
+
+}
+
+
+/* =====================================================
+   ACTUALIZAR CHUNKS
+===================================================== */
+
+function updateChunks(){
+
+    const pcx =
+    Math.floor(
+
+        player.x /
+        CHUNK_SIZE
+
+    );
+
+
+    const pcz =
+    Math.floor(
+
+        player.z /
+        CHUNK_SIZE
+
+    );
+
+
+    const needed =
+    new Set();
+
+
+    for(
+
+        let x=-RENDER_DISTANCE;
+        x<=RENDER_DISTANCE;
+        x++
+
+    ){
+
+        for(
+
+            let z=-RENDER_DISTANCE;
+            z<=RENDER_DISTANCE;
+            z++
+
+        ){
+
+            const cx =
+            pcx+x;
+
+
+            const cz =
+            pcz+z;
+
+
+            const key =
+            chunkKey(cx,cz);
+
+
+            needed.add(
+                key
+            );
+
+
+            loadChunk(
+                cx,
+                cz
+            );
+
+        }
+
+    }
+
+
+    for(
+        const key of [...chunks.keys()]
+    ){
+
+        if(
+            !needed.has(key)
+        ){
+
+            const parts =
+            key.split(",");
+
+
+            unloadChunk(
+
+                Number(parts[0]),
+                Number(parts[1])
+
+            );
+
+        }
+
+    }
+
+}
+
+
+/* =====================================================
+   LAVA SHADER
+===================================================== */
+
+const lavaMaterial =
+new THREE.ShaderMaterial({
+
+    uniforms:{
+
+        time:{
+            value:0
+        }
+
+    },
+
+
+    vertexShader:`
+
+        varying vec2 vUv;
+
+        void main(){
+
+            vUv = uv;
+
+            gl_Position =
+                projectionMatrix *
+                modelViewMatrix *
+                vec4(position,1.0);
+
+        }
+
+    `,
+
+
+    fragmentShader:`
+
+        uniform float time;
+
+        varying vec2 vUv;
+
+        void main(){
+
+            float wave =
+                sin(
+                    vUv.x*20.0+
+                    time
+                )*0.1;
+
+            vec3 color =
+                vec3(
+
+                    1.0,
+
+                    0.4+wave,
+
+                    0.05
+
                 );
 
-                maxY=screenY;
-            }
+            gl_FragColor =
+                vec4(
+                    color,
+                    1.0
+                );
+
         }
+
+    `
+
+});
+
+
+const lava =
+new THREE.Mesh(
+
+    new THREE.CircleGeometry(
+        700,
+        128
+    ),
+
+    lavaMaterial
+
+);
+
+
+lava.rotation.x =
+-Math.PI/2;
+
+
+lava.position.y =
+0.2;
+
+
+scene.add(
+    lava
+);
+
+
+/* =====================================================
+   PARTÍCULAS DE NIEBLA
+===================================================== */
+
+const fogCanvas =
+document.createElement(
+    "canvas"
+);
+
+
+fogCanvas.width = 64;
+fogCanvas.height = 64;
+
+
+const fogContext =
+fogCanvas.getContext(
+    "2d"
+);
+
+
+const gradient =
+fogContext.createRadialGradient(
+
+    32,32,2,
+
+    32,32,32
+
+);
+
+
+gradient.addColorStop(
+    0,
+    "rgba(255,100,20,0.25)"
+);
+
+
+gradient.addColorStop(
+    1,
+    "rgba(255,50,0,0)"
+);
+
+
+fogContext.fillStyle =
+gradient;
+
+
+fogContext.fillRect(
+    0,
+    0,
+    64,
+    64
+);
+
+
+const fogTexture =
+new THREE.CanvasTexture(
+    fogCanvas
+);
+
+
+const fogMaterial =
+new THREE.SpriteMaterial({
+
+    map:fogTexture,
+
+    transparent:true,
+
+    depthWrite:false,
+
+    opacity:0.45
+
+});
+
+
+for(let i=0;i<600;i++){
+
+    const sprite =
+    new THREE.Sprite(
+        fogMaterial
+    );
+
+
+    sprite.position.set(
+
+        Math.random()*500-250,
+
+        Math.random()*30,
+
+        Math.random()*500-250
+
+    );
+
+
+    const scale =
+    1+Math.random()*3;
+
+
+    sprite.scale.set(
+        scale,
+        scale,
+        scale
+    );
+
+
+    scene.add(
+        sprite
+    );
+
+
+    particles.push(
+        sprite
+    );
+
+}
+
+
+/* =====================================================
+   AUDIO AMBIENTAL
+===================================================== */
+
+const listener =
+new THREE.AudioListener();
+
+
+camera.add(
+    listener
+);
+
+
+const ambient =
+new THREE.Audio(
+    listener
+);
+
+
+const audioLoader =
+new THREE.AudioLoader();
+
+
+let audioStarted =
+false;
+
+
+function startAmbientAudio(){
+
+    if(audioStarted)
+        return;
+
+
+    audioStarted = true;
+
+
+    audioLoader.load(
+
+        "wind.mp3",
+
+        buffer=>{
+
+            ambient.setBuffer(
+                buffer
+            );
+
+
+            ambient.setLoop(
+                true
+            );
+
+
+            ambient.setVolume(
+                0.25
+            );
+
+
+            ambient.play();
+
+        }
+
+    );
+
+}
+
+
+document.addEventListener(
+
+    "click",
+
+    startAmbientAudio,
+
+    {once:false}
+
+);
+
+
+/* =====================================================
+   FÍSICA
+===================================================== */
+
+const gravity =
+0.02;
+
+
+function updatePlayer(){
+
+    const speed =
+    0.18;
+
+
+    let moveX = 0;
+    let moveZ = 0;
+
+
+    const fx =
+    Math.sin(
+        cameraYaw
+    );
+
+
+    const fz =
+    Math.cos(
+        cameraYaw
+    );
+
+
+    const rx =
+    Math.sin(
+        cameraYaw+
+        Math.PI/2
+    );
+
+
+    const rz =
+    Math.cos(
+        cameraYaw+
+        Math.PI/2
+    );
+
+
+    if(
+        keys.KeyW ||
+        keys.ArrowUp
+    ){
+
+        moveX +=
+        fx*speed;
+
+        moveZ +=
+        fz*speed;
+
     }
+
+
+    if(
+        keys.KeyS ||
+        keys.ArrowDown
+    ){
+
+        moveX -=
+        fx*speed;
+
+        moveZ -=
+        fz*speed;
+
+    }
+
+
+    if(
+        keys.KeyA ||
+        keys.ArrowLeft
+    ){
+
+        moveX -=
+        rx*speed;
+
+        moveZ -=
+        rz*speed;
+
+    }
+
+
+    if(
+        keys.KeyD ||
+        keys.ArrowRight
+    ){
+
+        moveX +=
+        rx*speed;
+
+        moveZ +=
+        rz*speed;
+
+    }
+
+
+    const nextX =
+    player.x+
+    moveX;
+
+
+    const nextZ =
+    player.z+
+    moveZ;
+
+
+    if(
+
+        !collideTrees(
+            nextX,
+            player.z
+        )
+
+        &&
+
+        !collideRocks(
+            nextX,
+            player.z
+        )
+
+    ){
+
+        player.x =
+        nextX;
+
+    }
+
+
+    if(
+
+        !collideTrees(
+            player.x,
+            nextZ
+        )
+
+        &&
+
+        !collideRocks(
+            player.x,
+            nextZ
+        )
+
+    ){
+
+        player.z =
+        nextZ;
+
+    }
+
+
+    player.velY -=
+    gravity;
+
+
+    player.y +=
+    player.velY;
+
+
+    const ground =
+    getHeight(
+        player.x,
+        player.z
+    );
+
+
+    /*
+       Suavizado solicitado.
+    */
+
+    if(
+        player.y <
+        ground+1
+    ){
+
+        player.y +=
+
+        (
+
+            ground+1-
+            player.y
+
+        )*0.18;
+
+
+        if(
+            Math.abs(
+                player.y-
+                (ground+1)
+            )<0.02
+        ){
+
+            player.y =
+            ground+1;
+
+            player.velY = 0;
+
+            player.grounded =
+            true;
+
+        }
+
+    }
+    else{
+
+        player.grounded =
+        false;
+
+    }
+
+
+    if(
+
+        keys.Space &&
+        player.grounded
+
+    ){
+
+        player.velY =
+        0.4;
+
+        player.grounded =
+        false;
+
+    }
+
+
+    if(
+        player.y<-20
+    ){
+
+        player.x=0;
+        player.y=20;
+        player.z=0;
+
+        player.velY=0;
+
+    }
+
+
+    if(
+
+        getHeight(
+            player.x,
+            player.z
+        )
+
+        <=
+        LAVA_LEVEL
+
+    ){
+
+        player.x=0;
+        player.y=20;
+        player.z=0;
+
+        player.velY=0;
+
+    }
+
+
+    playerMesh.position.set(
+
+        player.x,
+        player.y,
+        player.z
+
+    );
+
 }
 
-function drawMoon(){
 
-    ctx.fillStyle="#ffd38a";
+/* =====================================================
+   CÁMARA NUEVA
+===================================================== */
 
-    ctx.beginPath();
-    ctx.arc(
-        canvas.width*0.8,
-        canvas.height*0.22,
-        50,
-        0,
-        Math.PI*2
+const cameraPosition =
+new THREE.Vector3();
+
+
+function updateCamera(){
+
+    let desiredDistance =
+    8;
+
+
+    for(
+
+        let d=desiredDistance;
+
+        d>1;
+
+        d-=0.2
+
+    ){
+
+        const tx =
+        player.x-
+        Math.sin(cameraYaw)*d;
+
+
+        const ty =
+        player.y+3;
+
+
+        const tz =
+        player.z-
+        Math.cos(cameraYaw)*d;
+
+
+        if(
+
+            !cameraBlocked(
+                tx,
+                ty,
+                tz
+            )
+
+        ){
+
+            desiredDistance =
+            d;
+
+            break;
+
+        }
+
+    }
+
+
+    const desiredPosition =
+    new THREE.Vector3(
+
+        player.x-
+        Math.sin(cameraYaw)*
+        desiredDistance,
+
+        player.y+3,
+
+        player.z-
+        Math.cos(cameraYaw)*
+        desiredDistance
+
     );
 
-    ctx.fill();
+
+    cameraPosition.lerp(
+
+        desiredPosition,
+
+        0.08
+
+    );
+
+
+    camera.position.lerp(
+
+        cameraPosition,
+
+        0.08
+
+    );
+
+
+    camera.lookAt(
+
+        player.x,
+        player.y+1,
+        player.z
+
+    );
+
 }
 
-function drawFog(){
 
-    let g = ctx.createLinearGradient(
-        0,
-        canvas.height*0.4,
-        0,
-        canvas.height
-    );
+/* =====================================================
+   LOD
+===================================================== */
 
-    g.addColorStop(0,
-        "rgba(255,120,0,0)"
-    );
+function updateLOD(){
 
-    g.addColorStop(1,
-        "rgba(255,120,0,0.18)"
-    );
+    for(
+        const tree of trees
+    ){
 
-    ctx.fillStyle=g;
+        const d =
+        tree.mesh.position.distanceTo(
+            camera.position
+        );
 
-    ctx.fillRect(
-        0,
-        0,
-        canvas.width,
-        canvas.height
-    );
+
+        tree.mesh.visible =
+        d<100;
+
+    }
+
+
+    for(
+        const rock of rocks
+    ){
+
+        const d =
+        rock.mesh.position.distanceTo(
+            camera.position
+        );
+
+
+        rock.mesh.visible =
+        d<80;
+
+    }
+
 }
+
+
+/* =====================================================
+   GUARDADO
+===================================================== */
+
+function saveGame(){
+
+    localStorage.setItem(
+
+        "darkIslandSave",
+
+        JSON.stringify({
+
+            x:player.x,
+            y:player.y,
+            z:player.z
+
+        })
+
+    );
+
+}
+
+
+setInterval(
+
+    saveGame,
+
+    10000
+
+);
+
+
+function loadGame(){
+
+    const raw =
+    localStorage.getItem(
+        "darkIslandSave"
+    );
+
+
+    if(!raw)
+        return;
+
+
+    try{
+
+        const save =
+        JSON.parse(raw);
+
+
+        player.x =
+        save.x;
+
+        player.y =
+        save.y;
+
+        player.z =
+        save.z;
+
+    }
+    catch(error){
+
+        console.warn(
+            "Guardado inválido",
+            error
+        );
+
+    }
+
+}
+
+
+/* =====================================================
+   TECLA F5
+===================================================== */
+
+addEventListener(
+
+    "keydown",
+
+    e=>{
+
+        if(
+            e.code==="F5"
+        ){
+
+            e.preventDefault();
+
+            saveGame();
+
+        }
+
+    }
+
+);
+
+
+/* =====================================================
+   ANIMACIÓN DE PARTÍCULAS
+===================================================== */
+
+function updateParticles(){
+
+    for(
+        const sprite of particles
+    ){
+
+        sprite.position.y +=
+        0.003;
+
+
+        if(
+            sprite.position.y>30
+        ){
+
+            sprite.position.y=0;
+
+        }
+
+    }
+
+}
+
+
+/* =====================================================
+   LOOP
+===================================================== */
 
 function loop(){
 
-    update();
+    updatePlayer();
 
-    drawSky();
-    drawLava();
-    renderTerrain();
-    drawMoon();
-    drawFog();
 
-    requestAnimationFrame(loop);
+    updateChunks();
+
+
+    processChunkQueue();
+
+
+    updateCamera();
+
+
+    cameraCollision();
+
+
+    updateLOD();
+
+
+    updateParticles();
+
+
+    lavaMaterial
+    .uniforms
+    .time
+    .value =
+
+        performance.now()*
+        0.001;
+
+
+    renderer.render(
+
+        scene,
+        camera
+
+    );
+
+
+    requestAnimationFrame(
+        loop
+    );
+
 }
+
+
+/* =====================================================
+   INICIO
+===================================================== */
+
+loadGame();
+
 
 loop();
 
+
+/* =====================================================
+   RESIZE
+===================================================== */
+
+onresize = ()=>{
+
+    camera.aspect =
+    innerWidth/
+    innerHeight;
+
+
+    camera.updateProjectionMatrix();
+
+
+    renderer.setSize(
+
+        innerWidth,
+        innerHeight
+
+    );
+
+};
+
 </script>
+
 </body>
 </html>
